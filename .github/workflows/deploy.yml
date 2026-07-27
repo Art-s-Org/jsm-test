@@ -23,23 +23,88 @@ jobs:
     name: Build
     runs-on: ubuntu-latest
     outputs:
-      change_key: ${{ steps.stamp.outputs.change_key }}
-      target_env: ${{ steps.stamp.outputs.target_env }}
+      change_key: ${{ steps.resolve.outputs.change_key }}
+      target_env: ${{ steps.resolve.outputs.target_env }}
+      sha: ${{ steps.resolve.outputs.sha }}
     steps:
+      # Runs before checkout on purpose: this decides *what* we are allowed to
+      # check out. The commit comes from the change request, not from whatever
+      # happens to be on main when the approval lands.
+      - name: Resolve the approved commit
+        id: resolve
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const p = context.payload.client_payload || {};
+
+            const key = String(p.issue_key || p.change_key || 'UNKNOWN').trim().toUpperCase();
+            const targetEnv = String(p.environment || 'production').trim().toLowerCase();
+            const requested = String(p.sha || '').trim();
+
+            if (!requested) {
+              core.setFailed(
+                'Change ' + key + ' did not carry a deployment commit. Set the ' +
+                '"Deployment SHA" field on the change request before approving it - ' +
+                'otherwise there is no way to prove what was approved.'
+              );
+              return;
+            }
+
+            // Must be a real commit in this repository. Accepts short SHAs.
+            let full;
+            try {
+              const commit = await github.rest.repos.getCommit({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                ref: requested,
+              });
+              full = commit.data.sha;
+            } catch (err) {
+              core.setFailed('"' + requested + '" is not a commit in this repository.');
+              return;
+            }
+
+            // Must already be merged to the default branch. Stops an approved
+            // change from shipping code that never landed on main.
+            const base = context.payload.repository.default_branch;
+            const cmp = await github.rest.repos.compareCommitsWithBasehead({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              basehead: base + '...' + full,
+            });
+            if (!['identical', 'behind'].includes(cmp.data.status)) {
+              core.setFailed(
+                full.slice(0, 7) + ' is not merged into ' + base + ' (status: ' +
+                cmp.data.status + '). Only merged commits can be deployed.'
+              );
+              return;
+            }
+
+            core.setOutput('change_key', key);
+            core.setOutput('target_env', targetEnv);
+            core.setOutput('sha', full);
+            core.info('Change ' + key + ' approved for ' + full.slice(0, 7) + ' -> ' + targetEnv);
+
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.resolve.outputs.sha }}
 
       - name: Stamp the page with this deployment
         id: stamp
         uses: actions/github-script@v7
         env:
           JSM_SITE_URL: ${{ vars.JSM_SITE_URL }}
+          CHANGE_KEY: ${{ steps.resolve.outputs.change_key }}
+          TARGET_ENV: ${{ steps.resolve.outputs.target_env }}
+          DEPLOY_SHA: ${{ steps.resolve.outputs.sha }}
         with:
           script: |
             const fs = require('fs');
             const p = context.payload.client_payload || {};
 
-            const key = String(p.issue_key || p.change_key || 'UNKNOWN').trim().toUpperCase();
-            const targetEnv = String(p.environment || 'production').trim();
+            const key = process.env.CHANGE_KEY;
+            const targetEnv = process.env.TARGET_ENV;
+            const sha = process.env.DEPLOY_SHA;
             const site = (process.env.JSM_SITE_URL || '').replace(/\/+$/, '');
             const repo = context.repo.owner + '/' + context.repo.repo;
 
@@ -48,8 +113,8 @@ jobs:
               CHANGE_URL: site ? site + '/browse/' + key : '#',
               ENVIRONMENT: targetEnv,
               REPO: repo,
-              SHA: context.sha,
-              SHORT_SHA: context.sha.slice(0, 7),
+              SHA: sha,
+              SHORT_SHA: sha.slice(0, 7),
               RUN_NUMBER: String(context.runNumber),
               RUN_URL: process.env.GITHUB_SERVER_URL + '/' + repo + '/actions/runs/' + context.runId,
               APPROVED_BY: String(p.approved_by || 'JSM approvers'),
@@ -61,9 +126,6 @@ jobs:
               html = html.split('{{' + k + '}}').join(v);
             }
             fs.writeFileSync('site/index.html', html);
-
-            core.setOutput('change_key', key);
-            core.setOutput('target_env', targetEnv);
 
       - uses: actions/upload-pages-artifact@v3
         with:
@@ -96,6 +158,7 @@ jobs:
     env:
       CHANGE_KEY: ${{ needs.prepare.outputs.change_key }}
       TARGET_ENV: ${{ needs.prepare.outputs.target_env }}
+      DEPLOY_SHA: ${{ needs.prepare.outputs.sha }}
       PAGE_URL: ${{ needs.publish.outputs.page_url }}
     steps:
       - name: Cut a release for the change
@@ -108,6 +171,7 @@ jobs:
             const targetEnv = process.env.TARGET_ENV;
             const site = (process.env.JSM_SITE_URL || '').replace(/\/+$/, '');
             const pageUrl = process.env.PAGE_URL;
+            const sha = process.env.DEPLOY_SHA;
             const tag = 'deploy-' + targetEnv + '-' + context.runNumber;
 
             const body = [
@@ -117,7 +181,7 @@ jobs:
               '|---|---|',
               '| Change | ' + (site ? '[' + key + '](' + site + '/browse/' + key + ')' : key) + ' |',
               '| Environment | `' + targetEnv + '` |',
-              '| Commit | `' + context.sha.slice(0, 7) + '` |',
+              '| Commit | `' + sha.slice(0, 7) + '` |',
               '| Site | ' + (pageUrl || '_Pages not enabled_') + ' |',
               '',
               'This deployment was gated in Jira Service Management. It started only ' +
@@ -128,7 +192,7 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo,
               tag_name: tag,
-              target_commitish: context.sha,
+              target_commitish: sha,
               name: key + ' -> ' + targetEnv,
               body,
             });
@@ -155,8 +219,8 @@ jobs:
                 data: {
                   event: 'deployment-completed',
                   repo,
-                  sha: context.sha,
-                  short_sha: context.sha.slice(0, 7),
+                  sha: process.env.DEPLOY_SHA,
+                  short_sha: process.env.DEPLOY_SHA.slice(0, 7),
                   environment: process.env.TARGET_ENV,
                   url: process.env.PAGE_URL || runUrl,
                   run_url: runUrl,

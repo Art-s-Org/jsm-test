@@ -30,10 +30,12 @@ The gate is structural, not advisory:
 
 - `2 · Deploy` has **no** `push` and **no** `workflow_dispatch` trigger. Its only
   trigger is `repository_dispatch: [jsm-approved]`, which only JSM sends.
-- JSM Flow B only fires on an approved approval **and** only if a deployment was
-  actually attached (the `deployment-attached` label).
-- A made-up change key resolves to no work item in JSM, so Flow A does nothing,
-  no label is set, and approval can never release anything.
+- JSM Flow B only fires on an **approved** approval, and only if the change
+  request actually carries a `Deployment SHA`.
+- GitHub then re-checks the payload before touching anything: the commit must
+  exist in this repository and must already be merged to the default branch.
+  **The commit that deploys is the one the change request named** — not whatever
+  happened to be on `main` when the approval landed.
 
 ## Files
 
@@ -60,11 +62,17 @@ Optionally add required reviewers to the `production` environment
 
 ## Try it
 
-1. Raise a change request in **EISM**. Note the key, e.g. `EISM-42`.
-2. Actions → **1 · Request deploy** → run it with that key. It attaches and stops.
-   Check the ticket: there is a comment and a `deployment-attached` label.
-3. Run it again with a key that does not exist — the flow no-ops, no label, and
-   approving that change later releases nothing.
-4. Approve `EISM-42` in JSM. Within seconds **2 · Deploy** starts on its own,
-   publishes the page, cuts release `deploy-production-N`, and comments the
-   result back on the ticket.
+1. Raise a change request in **EISM**. Set `Deployment SHA` to a commit on `main`
+   and `Deployment environment` to `production`. Note the key, e.g. `EISM-42`.
+2. Approve it. Within seconds **2 · Deploy** starts on its own, checks out that
+   exact commit, publishes the page, cuts release `deploy-production-N`, and
+   comments the result back on the ticket.
+
+Then prove the gate actually holds:
+
+3. Approve a change with `Deployment SHA` empty → Flow B's condition stops it,
+   nothing is dispatched, nothing deploys.
+4. Put a commit that only exists on a branch into `Deployment SHA` and approve →
+   GitHub dispatches, then fails closed with "not merged into main".
+5. Decline an approval → the trigger fires, but `finalDecision` is not
+   `approved`, so nothing leaves JSM.

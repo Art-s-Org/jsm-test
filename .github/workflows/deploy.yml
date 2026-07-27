@@ -1,0 +1,180 @@
+name: 2 · Deploy (released by JSM)
+
+# There is no push trigger and no manual trigger here on purpose. The only way
+# this workflow starts is a repository_dispatch sent by the JSM automation rule
+# that fires on "Approval completed". No approval in JSM, no deployment.
+
+on:
+  repository_dispatch:
+    types: [jsm-approved]
+
+permissions:
+  contents: write # create the release
+  pages: write # publish the site
+  id-token: write # required by actions/deploy-pages
+  deployments: write
+
+concurrency:
+  group: deploy-${{ github.event.client_payload.environment || 'production' }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    name: Build
+    runs-on: ubuntu-latest
+    outputs:
+      change_key: ${{ steps.stamp.outputs.change_key }}
+      target_env: ${{ steps.stamp.outputs.target_env }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Stamp the page with this deployment
+        id: stamp
+        uses: actions/github-script@v7
+        env:
+          JSM_SITE_URL: ${{ vars.JSM_SITE_URL }}
+        with:
+          script: |
+            const fs = require('fs');
+            const p = context.payload.client_payload || {};
+
+            const key = String(p.issue_key || p.change_key || 'UNKNOWN').trim().toUpperCase();
+            const targetEnv = String(p.environment || 'production').trim();
+            const site = (process.env.JSM_SITE_URL || '').replace(/\/+$/, '');
+            const repo = context.repo.owner + '/' + context.repo.repo;
+
+            const values = {
+              CHANGE_KEY: key,
+              CHANGE_URL: site ? site + '/browse/' + key : '#',
+              ENVIRONMENT: targetEnv,
+              REPO: repo,
+              SHA: context.sha,
+              SHORT_SHA: context.sha.slice(0, 7),
+              RUN_NUMBER: String(context.runNumber),
+              RUN_URL: process.env.GITHUB_SERVER_URL + '/' + repo + '/actions/runs/' + context.runId,
+              APPROVED_BY: String(p.approved_by || 'JSM approvers'),
+              DEPLOYED_AT: new Date().toISOString().replace('T', ' ').slice(0, 19) + ' UTC',
+            };
+
+            let html = fs.readFileSync('site/index.html', 'utf8');
+            for (const [k, v] of Object.entries(values)) {
+              html = html.split('{{' + k + '}}').join(v);
+            }
+            fs.writeFileSync('site/index.html', html);
+
+            core.setOutput('change_key', key);
+            core.setOutput('target_env', targetEnv);
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  publish:
+    name: Publish to Pages
+    needs: prepare
+    runs-on: ubuntu-latest
+    # Pages needs a public repo on a free plan. If it is not enabled this job
+    # fails on its own without taking the release or the JSM write-back with it.
+    continue-on-error: true
+    environment:
+      name: github-pages
+      url: ${{ steps.pages.outputs.page_url }}
+    outputs:
+      page_url: ${{ steps.pages.outputs.page_url }}
+    steps:
+      - id: pages
+        uses: actions/deploy-pages@v4
+
+  record:
+    name: Record deployment & release
+    needs: [prepare, publish]
+    if: always() && needs.prepare.result == 'success'
+    runs-on: ubuntu-latest
+    environment:
+      name: ${{ needs.prepare.outputs.target_env }}
+      url: ${{ needs.publish.outputs.page_url || format('{0}/{1}/actions/runs/{2}', github.server_url, github.repository, github.run_id) }}
+    env:
+      CHANGE_KEY: ${{ needs.prepare.outputs.change_key }}
+      TARGET_ENV: ${{ needs.prepare.outputs.target_env }}
+      PAGE_URL: ${{ needs.publish.outputs.page_url }}
+    steps:
+      - name: Cut a release for the change
+        uses: actions/github-script@v7
+        env:
+          JSM_SITE_URL: ${{ vars.JSM_SITE_URL }}
+        with:
+          script: |
+            const key = process.env.CHANGE_KEY;
+            const targetEnv = process.env.TARGET_ENV;
+            const site = (process.env.JSM_SITE_URL || '').replace(/\/+$/, '');
+            const pageUrl = process.env.PAGE_URL;
+            const tag = 'deploy-' + targetEnv + '-' + context.runNumber;
+
+            const body = [
+              'Released by change request **' + key + '**.',
+              '',
+              '| | |',
+              '|---|---|',
+              '| Change | ' + (site ? '[' + key + '](' + site + '/browse/' + key + ')' : key) + ' |',
+              '| Environment | `' + targetEnv + '` |',
+              '| Commit | `' + context.sha.slice(0, 7) + '` |',
+              '| Site | ' + (pageUrl || '_Pages not enabled_') + ' |',
+              '',
+              'This deployment was gated in Jira Service Management. It started only ' +
+              'because the change request was approved.',
+            ].join('\n');
+
+            const release = await github.rest.repos.createRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              tag_name: tag,
+              target_commitish: context.sha,
+              name: key + ' -> ' + targetEnv,
+              body,
+            });
+            core.info('Created release ' + release.data.html_url);
+
+      - name: Tell JSM the change was implemented
+        uses: actions/github-script@v7
+        env:
+          JSM_WEBHOOK_URL: ${{ secrets.JSM_WEBHOOK_URL }}
+        with:
+          script: |
+            const hook = process.env.JSM_WEBHOOK_URL;
+            if (!hook) {
+              core.warning('JSM_WEBHOOK_URL not set - skipping write-back to JSM.');
+              return;
+            }
+            const repo = context.repo.owner + '/' + context.repo.repo;
+            const runUrl = process.env.GITHUB_SERVER_URL + '/' + repo + '/actions/runs/' + context.runId;
+            const res = await fetch(hook, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                issues: [process.env.CHANGE_KEY],
+                data: {
+                  event: 'deployment-completed',
+                  repo,
+                  sha: context.sha,
+                  short_sha: context.sha.slice(0, 7),
+                  environment: process.env.TARGET_ENV,
+                  url: process.env.PAGE_URL || runUrl,
+                  run_url: runUrl,
+                },
+              }),
+            });
+            if (!res.ok) core.warning('JSM write-back returned HTTP ' + res.status);
+            else core.info('JSM notified.');
+
+      - name: Summary
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const pageUrl = process.env.PAGE_URL;
+            const summary = core.summary
+              .addHeading('Deployed ' + process.env.CHANGE_KEY + ' to ' + process.env.TARGET_ENV, 2)
+              .addRaw('Released because the change request was approved in JSM.\n\n');
+            if (pageUrl) summary.addLink('Open the deployed site', pageUrl);
+            else summary.addRaw('_GitHub Pages is not enabled, so no page was published. ' +
+              'The release and the JSM write-back still ran._');
+            await summary.write();

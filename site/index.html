@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{{ENVIRONMENT}} · released by {{CHANGE_KEY}}</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --bg: #f6f8fa;
+        --card: #ffffff;
+        --ink: #1f2328;
+        --muted: #59636e;
+        --line: #d1d9e0;
+        --ok: #1a7f37;
+        --accent: #0969da;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #0d1117;
+          --card: #151b23;
+          --ink: #e6edf3;
+          --muted: #9198a1;
+          --line: #3d444d;
+          --ok: #3fb950;
+          --accent: #4493f8;
+        }
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        padding: 2.5rem 1.25rem;
+        background: var(--bg);
+        color: var(--ink);
+        font: 15px/1.55 ui-sans-serif, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+        display: flex;
+        justify-content: center;
+      }
+      main {
+        width: 100%;
+        max-width: 42rem;
+      }
+      .card {
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        padding: 1.75rem;
+      }
+      .badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.45rem;
+        padding: 0.25rem 0.7rem;
+        border: 1px solid var(--ok);
+        border-radius: 999px;
+        color: var(--ok);
+        font-size: 0.8rem;
+        font-weight: 600;
+        letter-spacing: 0.02em;
+      }
+      .dot {
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: var(--ok);
+      }
+      h1 {
+        margin: 1rem 0 0.35rem;
+        font-size: 1.6rem;
+        letter-spacing: -0.015em;
+      }
+      .sub {
+        margin: 0 0 1.5rem;
+        color: var(--muted);
+      }
+      dl {
+        margin: 0;
+        display: grid;
+        grid-template-columns: 10rem 1fr;
+        gap: 0.1rem 1rem;
+      }
+      dt {
+        color: var(--muted);
+        padding: 0.5rem 0;
+        border-top: 1px solid var(--line);
+      }
+      dd {
+        margin: 0;
+        padding: 0.5rem 0;
+        border-top: 1px solid var(--line);
+        overflow-wrap: anywhere;
+      }
+      dt:first-of-type,
+      dt:first-of-type + dd {
+        border-top: 0;
+      }
+      code {
+        font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+        font-size: 0.88em;
+      }
+      a {
+        color: var(--accent);
+      }
+      footer {
+        margin-top: 1.25rem;
+        color: var(--muted);
+        font-size: 0.85rem;
+        text-align: center;
+      }
+      @media (max-width: 30rem) {
+        dl {
+          grid-template-columns: 1fr;
+        }
+        dt {
+          padding-bottom: 0;
+          border-top: 1px solid var(--line);
+        }
+        dd {
+          border-top: 0;
+          padding-top: 0.15rem;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <div class="card">
+        <span class="badge"><span class="dot"></span> DEPLOYED</span>
+        <h1>{{ENVIRONMENT}}</h1>
+        <p class="sub">
+          This release was held until change request
+          <a href="{{CHANGE_URL}}">{{CHANGE_KEY}}</a> was approved in Jira Service
+          Management.
+        </p>
+
+        <dl>
+          <dt>Change request</dt>
+          <dd><a href="{{CHANGE_URL}}">{{CHANGE_KEY}}</a></dd>
+
+          <dt>Approved by</dt>
+          <dd>{{APPROVED_BY}}</dd>
+
+          <dt>Environment</dt>
+          <dd><code>{{ENVIRONMENT}}</code></dd>
+
+          <dt>Repository</dt>
+          <dd><code>{{REPO}}</code></dd>
+
+          <dt>Commit</dt>
+          <dd><code>{{SHORT_SHA}}</code></dd>
+
+          <dt>Release</dt>
+          <dd><code>deploy-{{ENVIRONMENT}}-{{RUN_NUMBER}}</code></dd>
+
+          <dt>Deployed at</dt>
+          <dd>{{DEPLOYED_AT}}</dd>
+
+          <dt>Pipeline</dt>
+          <dd><a href="{{RUN_URL}}">run #{{RUN_NUMBER}}</a></dd>
+        </dl>
+      </div>
+      <footer>Nothing real was deployed. This page is the artifact.</footer>
+    </main>
+  </body>
+</html>

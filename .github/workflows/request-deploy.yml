@@ -1,0 +1,100 @@
+name: 1 · Request deploy
+
+# You cannot deploy from here. This workflow only *attaches* a deployment to an
+# existing change request in JSM and then stops.
+#
+# JSM decides the rest: when the change is approved, a JSM automation rule fires
+# a repository_dispatch back at us and "2 · Deploy" runs. If the change key does
+# not exist, no rule ever fires and nothing is ever deployed — fail closed.
+
+on:
+  workflow_dispatch:
+    inputs:
+      change_key:
+        description: "Change request this deployment belongs to (e.g. ECS-42)"
+        required: true
+        type: string
+      environment:
+        description: "Target environment"
+        required: true
+        default: staging
+        type: choice
+        options:
+          - staging
+          - production
+
+permissions:
+  contents: read
+
+jobs:
+  attach:
+    name: Attach deployment to change request
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send deployment to JSM
+        uses: actions/github-script@v7
+        env:
+          JSM_WEBHOOK_URL: ${{ secrets.JSM_WEBHOOK_URL }}
+          JSM_SITE_URL: ${{ vars.JSM_SITE_URL }}
+          CHANGE_KEY: ${{ inputs.change_key }}
+          TARGET_ENV: ${{ inputs.environment }}
+        with:
+          script: |
+            const hook = process.env.JSM_WEBHOOK_URL;
+            if (!hook) throw new Error('Secret JSM_WEBHOOK_URL is not set.');
+
+            const key = (process.env.CHANGE_KEY || '').trim().toUpperCase();
+            if (!/^[A-Z][A-Z0-9]+-\d+$/.test(key)) {
+              core.setFailed('"' + key + '" is not a work item key. Expected something like ECS-42.');
+              return;
+            }
+
+            const repo = context.repo.owner + '/' + context.repo.repo;
+            const runUrl = process.env.GITHUB_SERVER_URL + '/' + repo + '/actions/runs/' + context.runId;
+
+            // "issues" is how a JSM incoming-webhook rule scopes itself to a work
+            // item. An unknown key simply matches nothing and the rule no-ops.
+            const payload = {
+              issues: [key],
+              data: {
+                event: 'deployment-requested',
+                repo,
+                sha: context.sha,
+                short_sha: context.sha.slice(0, 7),
+                ref: context.ref,
+                environment: process.env.TARGET_ENV,
+                run_id: String(context.runId),
+                run_url: runUrl,
+                requested_by: context.actor,
+              },
+            };
+
+            const res = await fetch(hook, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(payload),
+            });
+            const text = await res.text();
+            if (!res.ok) {
+              core.setFailed('JSM webhook returned HTTP ' + res.status + '\n' + text);
+              return;
+            }
+            core.info('JSM accepted the webhook: ' + text);
+
+            const site = (process.env.JSM_SITE_URL || '').replace(/\/+$/, '');
+            const summary = core.summary
+              .addHeading('Deployment attached to ' + key, 2)
+              .addTable([
+                [{ data: 'Field', header: true }, { data: 'Value', header: true }],
+                ['Change request', key],
+                ['Environment', process.env.TARGET_ENV],
+                ['Commit', context.sha.slice(0, 7)],
+                ['Requested by', context.actor],
+              ])
+              .addRaw(
+                '\n**Nothing has been deployed.** The change request now holds this ' +
+                'deployment. Once it is approved in JSM, the approval rule releases it ' +
+                'and `2 · Deploy` starts automatically.\n\n'
+              );
+            if (site) summary.addLink('Open ' + key + ' in JSM', site + '/browse/' + key);
+            await summary.write();

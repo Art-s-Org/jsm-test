@@ -202,6 +202,7 @@ jobs:
         uses: actions/github-script@v7
         env:
           JSM_WEBHOOK_URL: ${{ secrets.JSM_WEBHOOK_URL }}
+          JSM_WEBHOOK_SECRET: ${{ secrets.JSM_WEBHOOK_SECRET }}
         with:
           script: |
             const hook = process.env.JSM_WEBHOOK_URL;
@@ -211,9 +212,15 @@ jobs:
             }
             const repo = context.repo.owner + '/' + context.repo.repo;
             const runUrl = process.env.GITHUB_SERVER_URL + '/' + repo + '/actions/runs/' + context.runId;
+
+            const headers = { 'Content-Type': 'application/json' };
+            if (process.env.JSM_WEBHOOK_SECRET) {
+              headers['X-Automation-Webhook-Token'] = process.env.JSM_WEBHOOK_SECRET;
+            }
+
             const res = await fetch(hook, {
               method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
+              headers,
               body: JSON.stringify({
                 issues: [process.env.CHANGE_KEY],
                 data: {

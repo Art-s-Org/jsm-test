@@ -133,6 +133,20 @@ Copy the generated URL into GitHub:
 gh secret set JSM_WEBHOOK_URL --repo Art-s-Org/jsm-test
 ```
 
+The trigger also offers a **Secret**. Generate one and store it too:
+
+```
+gh secret set JSM_WEBHOOK_SECRET --repo Art-s-Org/jsm-test
+```
+
+It is a plain token, not an HMAC signature. The caller sends it as the header
+`X-Automation-Webhook-Token: <secret>`, which both workflows do automatically
+whenever `JSM_WEBHOOK_SECRET` is present, and omit entirely when it is not.
+
+Worth setting: without it, the URL is the only thing standing between the
+internet and the ability to write comments and set fields on your change
+requests. With it, a leaked URL alone is useless.
+
 **If** `{{webhookData.data.event}}` equals `deployment-requested`:
 
 - **Edit work item** → set `Deployment repo` = `{{webhookData.data.repo}}`,
